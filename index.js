@@ -13,15 +13,14 @@ import {
 const anthropic = new Anthropic();
 
 const MODEL_HAIKU = "claude-3-haiku-20240307";
+const MODEL_OPUS = "claude-3-opus-20240229";
 
 const createAPIMessage = async (model, messages) => {
   return anthropic.beta.tools.messages.create({
     model,
     max_tokens: 1024,
-    system:
-      "You are a friendly assistant called Sam. Use one of the provided tools to answer the users questions, or if a tool does not exist, simply answer the question directly. Do not include phrases like 'based on the provided tool'",
     messages,
-    tools: [weatherToolSchema, getOrderStatusSchema],
+    tools: [weatherToolSchema, getOrderStatusSchema, subAgentSchema],
   });
 };
 
@@ -29,12 +28,21 @@ const processConversation = async (message, model = MODEL_HAIKU) => {
   const messages = [{ role: "user", content: message }];
   let response = await createAPIMessage(model, messages);
 
+  console.log(response);
+
   while (response.stop_reason === "tool_use") {
     // Create the messages array with the original user message and AI response
     const messages = [
       { role: "user", content: message },
       { role: "assistant", content: response.content },
     ];
+
+    // The next message in this sequence needs to be a USER message with the Tool Responses
+    // We can create this object with an empty content array
+    const toolMessages = {
+      role: "user",
+      content: [],
+    };
 
     // Loop through the response content to handle any tool_use messages
     for (let i = 0; i < response.content.length; i++) {
@@ -54,18 +62,16 @@ const processConversation = async (message, model = MODEL_HAIKU) => {
         const toolResult = await toolHandler(toolName, toolInput);
 
         // Add the tool result to the messages array
-        messages.push({
-          role: "user",
-          content: [
-            {
-              type: "tool_result",
-              tool_use_id: toolId,
-              content: toolResult,
-            },
-          ],
+        toolMessages.content.push({
+          type: "tool_result",
+          tool_use_id: toolId,
+          content: toolResult,
         });
       }
     }
+
+    // Append the tool responses to the messages array
+    messages.push(toolMessages);
 
     // Create a new message which includes the tool results
     response = await createAPIMessage(model, messages);
